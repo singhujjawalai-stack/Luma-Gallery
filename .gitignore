@@ -14,3 +14,5 @@ app/build/
 !debug.keystore
 *.jks
 local.properties
+
+.kotlin/
