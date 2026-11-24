@@ -34,8 +34,18 @@ class ContentIndexWorker(context: Context, params: WorkerParameters) : Coroutine
         } catch (e: Exception) {
             emptyList()
         }
-        val images = media.filter { !it.isVideo }.take(1500)
         val indexed = db.contentDao().allOnce().map { MediaLib.norm(it.mediaUri) }.toSet()
+
+        // Take the newest images that still need indexing (older photos are reached
+        // in later runs instead of being permanently skipped by the 1500 cap).
+        val images = media
+            .filter { !it.isVideo && MediaLib.norm(it.uri) !in indexed }
+            .take(1500)
+
+        android.util.Log.d(
+            "ContentIndexWorker",
+            "start: ${media.size} media, ${images.size} new images to index, ${indexed.size} already indexed"
+        )
 
         val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         val labeler = ImageLabeling.getClient(ImageLabelerOptions.DEFAULT_OPTIONS)
@@ -81,6 +91,7 @@ class ContentIndexWorker(context: Context, params: WorkerParameters) : Coroutine
             labeler.close()
         }
 
+        android.util.Log.d("ContentIndexWorker", "done: ${images.size} images scanned, ${indexed.size} already indexed")
         return Result.success()
     }
 }

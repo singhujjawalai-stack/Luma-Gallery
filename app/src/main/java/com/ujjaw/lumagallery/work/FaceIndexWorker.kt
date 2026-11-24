@@ -39,8 +39,17 @@ class FaceIndexWorker(context: Context, params: WorkerParameters) : CoroutineWor
         } catch (e: Exception) {
             emptyList()
         }
-        val images = media.filter { !it.isVideo }.take(1500)
         val already = db.faceDao().allOnce().map { MediaLib.norm(it.mediaUri) }.toSet()
+
+        // Newest unindexed images first, capped per run (subsequent runs continue).
+        val images = media
+            .filter { !it.isVideo && MediaLib.norm(it.uri) !in already }
+            .take(1500)
+
+        android.util.Log.d(
+            "FaceIndexWorker",
+            "start: ${media.size} media, ${images.size} new images, ${already.size} already scanned"
+        )
 
         val options = FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
