@@ -12,10 +12,15 @@ import com.ujjaw.lumagallery.data.MediaLib
 import com.ujjaw.lumagallery.data.db.AppDb
 import com.ujjaw.lumagallery.data.db.FaceEntity
 import com.ujjaw.lumagallery.data.db.PersonEntity
+import com.ujjaw.lumagallery.data.db.ScannedEntity
 import com.ujjaw.lumagallery.util.averageHash
 import com.ujjaw.lumagallery.util.decodeScaled
 import com.ujjaw.lumagallery.util.hammingDistance
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.tasks.await
+import kotlin.coroutines.coroutineContext
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * On-device face indexing with improved clustering:
@@ -39,7 +44,8 @@ class FaceIndexWorker(context: Context, params: WorkerParameters) : CoroutineWor
         } catch (e: Exception) {
             emptyList()
         }
-        val already = db.faceDao().allOnce().map { MediaLib.norm(it.mediaUri) }.toSet()
+        val already = db.faceDao().allOnce().map { MediaLib.norm(it.mediaUri) }.toSet() +
+            db.scannedDao().allOnce().map { MediaLib.norm(it.uri) }.toSet()
 
         // Newest unindexed images first, capped per run (subsequent runs continue).
         val images = media
@@ -51,6 +57,11 @@ class FaceIndexWorker(context: Context, params: WorkerParameters) : CoroutineWor
             "start: ${media.size} media, ${images.size} new images, ${already.size} already scanned"
         )
 
+        if (images.isEmpty()) {
+            android.util.Log.d("FaceIndexWorker", "nothing new to scan")
+            return Result.success()
+        }
+
         val options = FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
             .setMinFaceSize(0.15f)
@@ -61,11 +72,18 @@ class FaceIndexWorker(context: Context, params: WorkerParameters) : CoroutineWor
         val members = HashMap<Long, MutableList<Long>>()
         val counts = HashMap<Long, Int>()
 
+        Indexing.faceRunning = true
         try {
             for (m in images) {
+                coroutineContext.ensureActive()
                 if (MediaLib.norm(m.uri) in already) continue
 
-                val bmp = decodeScaled(ctx, Uri.parse(m.uri), 640) ?: continue
+                val bmp = decodeScaled(ctx, Uri.parse(m.uri), 640)
+                if (bmp == null) {
+                    // Unreadable (e.g. cloud-only) — record it so we don't retry forever.
+                    db.scannedDao().markAll(listOf(ScannedEntity(uri = m.uri)))
+                    continue
+                }
                 try {
                     val faces = detector.process(InputImage.fromBitmap(bmp, 0)).await()
                     for (f in faces) {
@@ -78,6 +96,7 @@ class FaceIndexWorker(context: Context, params: WorkerParameters) : CoroutineWor
 
                         val faceBmp = Bitmap.createBitmap(bmp, left, top, w, h)
                         val hash = averageHash(Bitmap.createScaledBitmap(faceBmp, 8, 8, true))
+                        if (hash == 0L) continue
 
                         // min-linkage: distance to the closest member of every person
                         var bestId = -1L
@@ -123,14 +142,20 @@ class FaceIndexWorker(context: Context, params: WorkerParameters) : CoroutineWor
                             )
                         )
                     }
+                    // Mark as scanned even when no faces were found.
+                    db.scannedDao().markAll(listOf(ScannedEntity(uri = m.uri)))
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     // Skip unreadable images
                 } finally {
-                    bmp.recycle()
+                    // Never recycle while cancelled work may still be reading the bitmap.
+                    if (coroutineContext.isActive) bmp.recycle()
                 }
             }
         } finally {
             detector.close()
+            Indexing.faceRunning = false
         }
 
         // Persist updated counts
@@ -188,6 +213,14 @@ class FaceIndexWorker(context: Context, params: WorkerParameters) : CoroutineWor
                     db.personDao().delete(small)
                 }
             }
+        }
+
+        // Recompute counts/covers after merging so the People list shows real numbers.
+        val finalByPerson = db.faceDao().allOnce().groupBy { it.personId }
+        for (p in db.personDao().allOnce()) {
+            val fs = finalByPerson[p.id] ?: continue
+            if (fs.isEmpty()) continue
+            db.personDao().update(p.copy(count = fs.size, coverUri = fs.first().mediaUri))
         }
     }
 }

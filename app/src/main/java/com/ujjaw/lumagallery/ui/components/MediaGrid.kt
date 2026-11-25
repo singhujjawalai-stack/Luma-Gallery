@@ -251,10 +251,15 @@ fun MediaGrid(
             itemsIndexed(
                 entries,
                 span = { _, e -> GridItemSpan(if (e is GridEntry.Header) maxLineSpan else 1) },
-                key = { _, e ->
+                // Keys must be unique even if the same photo appears twice in the
+                // list (e.g. two faces on one photo, or the same item reached via
+                // both the old and new MediaStore URI). The position suffix keeps
+                // keys unique while preserving the original list index used by
+                // onOpen, so the viewer still opens the tapped photo.
+                key = { i, e ->
                     when (e) {
-                        is GridEntry.Header -> "h_${e.text}"
-                        is GridEntry.Cell -> e.item.uri
+                        is GridEntry.Header -> "h_${e.text}#$i"
+                        is GridEntry.Cell -> "${e.item.uri}#${e.index}"
                     }
                 }
             ) { _, entry ->

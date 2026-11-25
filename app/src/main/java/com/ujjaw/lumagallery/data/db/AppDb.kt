@@ -62,6 +62,16 @@ data class FaceEntity(
     val b: Float
 )
 
+/**
+ * Marks a photo as already run through face detection. Needed because photos
+ * without any face produce no `faces` rows — without this marker they would be
+ * re-scanned on every run and the batch would never advance.
+ */
+@Entity(tableName = "scanned_media")
+data class ScannedEntity(
+    @PrimaryKey val uri: String
+)
+
 @Dao
 interface FavoriteDao {
     @Query("SELECT * FROM favorites ORDER BY addedAt DESC")
@@ -191,9 +201,21 @@ interface FaceDao {
     suspend fun total(): Int
 }
 
+@Dao
+interface ScannedDao {
+    @Query("SELECT * FROM scanned_media")
+    suspend fun allOnce(): List<ScannedEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun markAll(items: List<ScannedEntity>)
+
+    @Query("DELETE FROM scanned_media")
+    suspend fun clear()
+}
+
 @Database(
-    entities = [FavoriteEntity::class, HiddenFolderEntity::class, HiddenItemEntity::class, PersonEntity::class, FaceEntity::class, ContentEntity::class],
-    version = 3,
+    entities = [FavoriteEntity::class, HiddenFolderEntity::class, HiddenItemEntity::class, PersonEntity::class, FaceEntity::class, ContentEntity::class, ScannedEntity::class],
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -203,6 +225,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun personDao(): PersonDao
     abstract fun faceDao(): FaceDao
     abstract fun contentDao(): ContentDao
+    abstract fun scannedDao(): ScannedDao
 }
 
 object AppDb {
@@ -228,10 +251,19 @@ object AppDb {
         }
     }
 
+    private val MIGRATION_3_4 = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `scanned_media` (" +
+                    "`uri` TEXT NOT NULL, PRIMARY KEY(`uri`))"
+            )
+        }
+    }
+
     fun init(context: Context) {
         if (!::db.isInitialized) {
             db = Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, "luma.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .fallbackToDestructiveMigration()
                 .build()
         }

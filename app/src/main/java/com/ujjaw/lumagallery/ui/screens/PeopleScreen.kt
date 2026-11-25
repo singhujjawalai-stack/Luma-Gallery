@@ -61,11 +61,6 @@ import com.ujjaw.lumagallery.data.db.PersonEntity
 import com.ujjaw.lumagallery.ui.ViewerSession
 import com.ujjaw.lumagallery.ui.components.MediaGrid
 import com.ujjaw.lumagallery.util.decodeScaled
-import com.ujjaw.lumagallery.work.FaceIndexWorker
-import androidx.work.ExistingWorkPolicy
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
 import kotlinx.coroutines.launch
 
 @Composable
@@ -73,10 +68,7 @@ fun PeopleScreen(nav: NavHostController) {
     val context = LocalContext.current
     val persons by AppDb.db.personDao().all().collectAsState(initial = emptyList())
 
-    val workList by remember {
-        WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow("face_index")
-    }.collectAsState(initial = emptyList())
-    val running = workList.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+    val running = com.ujjaw.lumagallery.work.Indexing.faceRunning
 
     Column(
         Modifier
@@ -103,13 +95,7 @@ fun PeopleScreen(nav: NavHostController) {
                     strokeWidth = 2.dp
                 )
             }
-            IconButton(onClick = {
-                WorkManager.getInstance(context).enqueueUniqueWork(
-                    "face_index",
-                    ExistingWorkPolicy.REPLACE,
-                    OneTimeWorkRequestBuilder<FaceIndexWorker>().build()
-                )
-            }) {
+            IconButton(onClick = { com.ujjaw.lumagallery.work.IndexScheduler.faces(context) }) {
                 Icon(Icons.Filled.Face, "Scan faces", tint = Color.White)
             }
         }
@@ -256,7 +242,12 @@ fun PersonScreen(nav: NavHostController, id: Long) {
         return
     }
 
-    val media = faces.map { it.mediaUri }.distinct().mapNotNull { uri -> MediaLib.find(uri) }
+    // Faces may store the same photo under old (generic) and new (volume-specific)
+    // URIs; MediaLib.find normalizes both to the same item, so dedupe the resolved
+    // items rather than the raw face URIs.
+    val media = faces.mapNotNull { MediaLib.find(it.mediaUri) }
+        .distinctBy { it.uri }
+        .sortedByDescending { it.dateTaken }
 
     Column(
         Modifier

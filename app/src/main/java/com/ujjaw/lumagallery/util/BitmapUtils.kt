@@ -29,11 +29,21 @@ fun rotateBitmap(src: Bitmap, degrees: Float): Bitmap {
     return Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true)
 }
 
-/** 8x8 average hash of a bitmap (perceptual fingerprint). */
+/** 8x8 average hash of a bitmap (perceptual fingerprint). Returns 0 if unreadable. */
 fun averageHash(src: Bitmap): Long {
-    val tiny = Bitmap.createScaledBitmap(src, 8, 8, true)
+    if (src.isRecycled) return 0L
+    val tiny = try {
+        if (src.width == 8 && src.height == 8) src
+        else Bitmap.createScaledBitmap(src, 8, 8, true)
+    } catch (e: Exception) {
+        return 0L
+    }
     val pixels = IntArray(64)
-    tiny.getPixels(pixels, 0, 8, 0, 0, 8, 8)
+    try {
+        tiny.getPixels(pixels, 0, 8, 0, 0, 8, 8)
+    } catch (e: Exception) {
+        return 0L
+    }
     var avg = 0.0
     val lum = DoubleArray(64)
     for (i in 0 until 64) {

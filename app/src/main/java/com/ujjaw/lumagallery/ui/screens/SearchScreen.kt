@@ -38,16 +38,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
-import androidx.work.ExistingWorkPolicy
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
 import com.ujjaw.lumagallery.data.MediaLib
 import com.ujjaw.lumagallery.data.db.AppDb
 import com.ujjaw.lumagallery.data.db.ContentEntity
 import com.ujjaw.lumagallery.ui.ViewerSession
 import com.ujjaw.lumagallery.ui.components.MediaGrid
-import com.ujjaw.lumagallery.work.ContentIndexWorker
 
 /** Every query word must appear in the image's detected labels or recognized text. */
 private fun contentMatch(row: ContentEntity, query: String): Boolean {
@@ -65,10 +60,7 @@ fun SearchScreen(nav: NavHostController) {
     var mode by rememberSaveable { mutableIntStateOf(0) } // 0 = names, 1 = content
 
     val contentRows by AppDb.db.contentDao().all().collectAsState(initial = emptyList())
-    val workList by remember {
-        WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow("content_index")
-    }.collectAsState(initial = emptyList())
-    val indexing = workList.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+    val indexing = com.ujjaw.lumagallery.work.Indexing.contentRunning
 
     val nameResults = remember(query, MediaLib.items) {
         val q = query.trim()
@@ -83,6 +75,7 @@ fun SearchScreen(nav: NavHostController) {
         else contentRows
             .filter { contentMatch(it, query) }
             .mapNotNull { MediaLib.find(it.mediaUri) }
+            .distinctBy { it.uri }
     }
 
     val results = if (mode == 0) nameResults else contentResults
@@ -194,11 +187,7 @@ fun SearchScreen(nav: NavHostController) {
                     )
                     Button(
                         onClick = {
-                            WorkManager.getInstance(context).enqueueUniqueWork(
-                                "content_index",
-                                ExistingWorkPolicy.REPLACE,
-                                OneTimeWorkRequestBuilder<ContentIndexWorker>().build()
-                            )
+                            com.ujjaw.lumagallery.work.IndexScheduler.content(context)
                         },
                         modifier = Modifier.padding(top = 20.dp)
                     ) { Text("Index photos") }

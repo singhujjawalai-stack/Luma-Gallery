@@ -39,14 +39,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavHostController
-import androidx.work.ExistingWorkPolicy
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
 import com.ujjaw.lumagallery.data.MediaLib
 import com.ujjaw.lumagallery.data.SettingsStore
 import com.ujjaw.lumagallery.data.db.AppDb
-import com.ujjaw.lumagallery.work.ContentIndexWorker
 import kotlinx.coroutines.launch
 
 /** Once unlocked with biometrics, stays unlocked for the current app session. */
@@ -63,10 +58,7 @@ fun SettingsScreen(nav: NavHostController) {
     val persons by AppDb.db.personDao().all().collectAsState(initial = emptyList())
     val contentRows by AppDb.db.contentDao().all().collectAsState(initial = emptyList())
 
-    val workList by remember {
-        WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow("content_index")
-    }.collectAsState(initial = emptyList())
-    val indexing = workList.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+    val indexing = com.ujjaw.lumagallery.work.Indexing.contentRunning
 
     fun gate(onPass: () -> Unit) {
         if (BiometricGate.unlocked) {
@@ -183,11 +175,7 @@ fun SettingsScreen(nav: NavHostController) {
                     onAction = {
                         scope.launch {
                             AppDb.db.contentDao().clear()
-                            WorkManager.getInstance(context).enqueueUniqueWork(
-                                "content_index",
-                                ExistingWorkPolicy.REPLACE,
-                                OneTimeWorkRequestBuilder<ContentIndexWorker>().build()
-                            )
+                            com.ujjaw.lumagallery.work.IndexScheduler.content(context)
                         }
                     }
                 )
@@ -204,6 +192,7 @@ fun SettingsScreen(nav: NavHostController) {
                         scope.launch {
                             AppDb.db.faceDao().deleteAll()
                             AppDb.db.personDao().deleteAll()
+                            AppDb.db.scannedDao().clear()
                         }
                     }
                 )
